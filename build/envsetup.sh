@@ -67,8 +67,11 @@ function breakfast()
             if ! check_product lineage_$target && check_product cm_$target; then
                 echo "** Warning: '$target' is using CM-based makefiles. This will be deprecated in the next major release."
                 lunch cm_$target-$variant
-            else
+            elif ! check_product MrTunnel_$target && check_product lineage_$target; then
                 lunch lineage_$target-$variant
+            else
+                echo "** Warning: '$target' is using Lineage-based makefiles."
+                lunch MrTunnel_$target-$variant
             fi
         fi
     fi
