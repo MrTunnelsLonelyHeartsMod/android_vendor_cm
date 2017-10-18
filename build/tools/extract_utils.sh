@@ -26,8 +26,7 @@ COMMON=-1
 ARCHES=
 FULLY_DEODEXED=-1
 
-TMPDIR="/tmp/extractfiles.$$"
-mkdir "$TMPDIR"
+TMPDIR=$(mktemp -d)
 
 #
 # cleanup
@@ -38,7 +37,7 @@ function cleanup() {
     rm -rf "${TMPDIR:?}"
 }
 
-trap cleanup EXIT INT TERM ERR
+trap cleanup 0
 
 #
 # setup_vendor
@@ -92,7 +91,7 @@ function setup_vendor() {
         COMMON=0
     fi
 
-    if [ "$5" == "true" ] || [ "$5" == "1" ]; then
+    if [ "$5" == "false" ] || [ "$5" == "0" ]; then
         VENDOR_STATE=1
         VENDOR_RADIO_STATE=1
     else
@@ -221,6 +220,7 @@ function write_packages() {
         ARGS=$(target_args "$P")
 
         BASENAME=$(basename "$FILE")
+        DIRNAME=$(dirname "$FILE")
         EXTENSION=${BASENAME##*.}
         PKGNAME=${BASENAME%.*}
 
@@ -300,6 +300,11 @@ function write_packages() {
         fi
         if [ ! -z "$EXTENSION" ]; then
             printf 'LOCAL_MODULE_SUFFIX := .%s\n' "$EXTENSION"
+        fi
+        if [ "$CLASS" = "SHARED_LIBRARIES" ] || [ "$CLASS" = "EXECUTABLES" ]; then
+            if [ "$DIRNAME" != "." ]; then
+                printf 'LOCAL_MODULE_RELATIVE_PATH := %s\n' "$DIRNAME"
+            fi
         fi
         if [ "$EXTRA" = "priv-app" ]; then
             printf 'LOCAL_PRIVILEGED_MODULE := true\n'
@@ -555,6 +560,7 @@ function _adb_connected {
 # parse_file_list:
 #
 # $1: input file
+# $2: blob section in file - optional
 #
 # Sets PRODUCT_PACKAGES and PRODUCT_COPY_FILES while parsing the input file
 #
@@ -566,6 +572,14 @@ function parse_file_list() {
         echo "Input file "$1" does not exist!"
         exit 1
     fi
+
+    if [ $# -eq 2 ]; then
+        LIST=$TMPDIR/files.txt
+        cat $1 | sed -n '/# '"$2"'/I,/^\s*$/p' > $LIST
+    else
+        LIST=$1
+    fi
+
 
     PRODUCT_PACKAGES_LIST=()
     PRODUCT_PACKAGES_HASHES=()
@@ -595,7 +609,7 @@ function parse_file_list() {
             PRODUCT_COPY_FILES_HASHES+=("$HASH")
         fi
 
-    done < <(egrep -v '(^#|^[[:space:]]*$)' "$1" | LC_ALL=C sort | uniq)
+    done < <(egrep -v '(^#|^[[:space:]]*$)' "$LIST" | LC_ALL=C sort | uniq)
 }
 
 #
@@ -685,7 +699,12 @@ function oat2dex() {
         echo "Checking if system is odexed and locating boot.oats..."
         for ARCH in "arm64" "arm" "x86_64" "x86"; do
             mkdir -p "$TMPDIR/system/framework/$ARCH"
-            if get_file "system/framework/$ARCH/" "$TMPDIR/system/framework/" "$SRC"; then
+            if [ -d "$SRC/framework" ] && [ "$SRC" != "adb" ]; then
+                ARCHDIR="framework/$ARCH/"
+            else
+                ARCHDIR="system/framework/$ARCH/"
+            fi
+            if get_file "$ARCHDIR" "$TMPDIR/system/framework/" "$SRC"; then
                 ARCHES+="$ARCH "
             else
                 rmdir "$TMPDIR/system/framework/$ARCH"
@@ -779,6 +798,7 @@ function fix_xml() {
 #
 # $1: file containing the list of items to extract
 # $2: path to extracted system folder, an ota zip file, or "adb" to extract from device
+# $3: section in list file to extract - optional
 #
 function extract() {
     if [ -z "$OUTDIR" ]; then
@@ -786,7 +806,11 @@ function extract() {
         exit 1
     fi
 
-    parse_file_list "$1"
+    if [ -z "$3" ]; then
+        parse_file_list "$1"
+    else
+        parse_file_list "$1" "$3"
+    fi
 
     # Allow failing, so we can try $DEST and/or $FILE
     set +e
@@ -863,6 +887,8 @@ function extract() {
             TARGET="$FROM"
             OUTPUT_DIR="$OUTPUT_DIR/rootfs"
             TMP_DIR="$TMP_DIR/rootfs"
+        elif [ -f "$SRC/$FILE" ] && [ "$SRC" != "adb" ]; then
+            TARGET="$FROM"
         else
             TARGET="system/$FROM"
             FILE="system/$FILE"
